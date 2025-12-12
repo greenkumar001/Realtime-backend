@@ -11,7 +11,7 @@
 ## Prerequisites
 - **Windows PowerShell** or Command Prompt
 - **Python 3.9+** (`python --version`)
-- **Node.js 18+** (`node --version`)
+
 - **Docker Desktop** (optional, for Postgres; or install Postgres separately)
 
 ---
