@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+alembic      # optional for migrations
+pydantic
+python-jose[cryptography]
+passlib[bcrypt]
+databasespsycopg2-binary
+python-dotenv
