@@ -23,3 +23,14 @@ class Question(Base):
     status = Column(String, default="Pending")  # Pending / Escalated / Answered
     escalated = Column(Boolean, default=False)
     answered_by = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    # Relationship for answers
+    answers = relationship("Answer", backref="question", cascade="all, delete-orphan")
+
+
+class Answer(Base):
+    __tablename__ = "answers"
+    answer_id = Column(Integer, primary_key=True, index=True)
+    question_id = Column(Integer, ForeignKey("questions.question_id"), nullable=False)
+    author_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    content = Column(Text, nullable=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now())

@@ -2,11 +2,14 @@ from fastapi import FastAPI, WebSocket, Depends, HTTPException, status, Query, R
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, desc
 from sqlalchemy.orm import sessionmaker, Session
-from .models import Base, Question, User
-from .schemas import QuestionCreate, QuestionOut, UserCreate, UserLogin, Token
+from .models import Base, Question, User, Answer
+from .schemas import QuestionCreate, QuestionOut, UserCreate, UserLogin, Token, AnswerCreate, AnswerOut
 from .auth import create_access_token, get_password_hash, verify_password, decode_token
 from .ws_manager import manager
 from typing import List, Optional
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+security = HTTPBearer(auto_error=False)
 import os
 from dotenv import load_dotenv
 import logging
@@ -61,10 +64,11 @@ def get_db():
     finally:
         db.close()
 
-def get_current_user(token: Optional[str] = None, db: Session = Depends(get_db)):
-    """Extract and validate user from JWT token"""
-    if not token:
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security), db: Session = Depends(get_db)):
+    """Extract and validate user from Authorization header Bearer token"""
+    if not credentials:
         return None
+    token = credentials.credentials
     try:
         data = decode_token(token)
         if not data:
@@ -179,6 +183,12 @@ def login(credentials: UserLogin, db: Session = Depends(get_db)):
     
     return {"access_token": token, "token_type": "bearer"}
 
+@app.get("/me", tags=["Auth"])
+def me(user: Optional[User] = Depends(get_current_user)):
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    return {"user_id": user.user_id, "username": user.username, "is_admin": user.is_admin}
+
 # ==================== Question Endpoints ====================
 
 @app.post("/questions", response_model=QuestionOut, tags=["Questions"])
@@ -252,12 +262,37 @@ def get_question(question_id: int, db: Session = Depends(get_db)):
     
     return question
 
+
+@app.post("/questions/{question_id}/answers", response_model=AnswerOut, tags=["Questions"])
+async def create_answer(question_id: int, payload: AnswerCreate, user: Optional[User] = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create an answer for a question (any user)."""
+    question = db.query(Question).filter(Question.question_id == question_id).first()
+    if not question:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Question not found")
+
+    answer = Answer(question_id=question_id, content=payload.content, author_id=(user.user_id if user else None))
+    db.add(answer)
+    db.commit()
+    db.refresh(answer)
+
+    # Broadcast new answer to websocket clients
+    try:
+        await manager.broadcast({
+            "type": "new_answer",
+            "answer": {
+                "answer_id": answer.answer_id,
+                "question_id": answer.question_id,
+                "content": answer.content,
+                "timestamp": answer.timestamp.isoformat()
+            }
+        })
+    except Exception:
+        logger.debug("WebSocket broadcast of new answer failed (non-critical)")
+
+    return answer
+
 @app.post("/questions/{question_id}/answer", tags=["Questions"])
-async def answer_question(
-    question_id: int,
-    token: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
+async def answer_question(question_id: int, user: Optional[User] = Depends(get_current_user), db: Session = Depends(get_db)):
     """
     Mark a question as answered (admin only).
     - Only logged-in admins can perform this action
@@ -272,7 +307,6 @@ async def answer_question(
         )
     
     # Check if user is admin
-    user = get_current_user(token, db)
     if not user or not user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
